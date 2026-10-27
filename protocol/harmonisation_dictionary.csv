@@ -1,0 +1,13 @@
+concept,2014,2018,status
+survey country,COUNTRYno,countryno,Numeric country codes require validated mapping including UK nations
+respondent birthplace,m133,countryborn,2014 national categories versus 2018 ISO strings; not equivalent
+maternal birthplace,m134,countrybornmo,2014 national categories versus 2018 ISO strings; not equivalent
+paternal birthplace,m135,countrybornfa,2014 national categories versus 2018 ISO strings; not equivalent
+perceived weight,thinkbody,thinkbody,Codebooks order 1 much too thin to 5 much too fat
+mass kg,bodyweight,bodyweight,WHO plausibility rules pending
+height cm,bodyheight,bodyheight,WHO plausibility rules pending
+age years,AGE,age,Audit numeric age; standardisation rule pending
+sex,sex,sex,1 male 2 female
+family affluence,fasfamcar fasbedroom fascomputers fasbathroom fasdishwash fasholidays,fasfamcar fasbedroom fascomputers fasbathroom fasdishwash fasholidays,Item direction and quintile procedure require approval
+survey weight,M137,weight,Available; design use unresolved
+class cluster,ClassID,cluster,Available; nesting and identifier stability unresolved

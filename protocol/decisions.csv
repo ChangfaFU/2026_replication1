@@ -1,0 +1,5 @@
+date,item,source,decision,rationale,timing
+2026-10-26,2014 exact origin,data/HBSC2014OAed1.1.pdf printed pp.123-125 m133-m135,Stop exact-origin estimation,National categories and another-country code cannot identify exact origins,After raw-input inspection before replication outcome construction
+2026-10-26,2018 import,data/HBSC2018OAed1.1.csv,Semicolon delimiter and decimal comma,Actual file format differs from 2014,After raw-input inspection before replication outcome construction
+2026-10-26,Earlier waves,Replication_protocol.md primary comparison,Exclude 2001 2006 2010 from analysis,Protocol targets 2014 and 2018,Before replication outcome construction
+2026-10-26,Downstream modelling,Replication_protocol.md Sections 3 7 10,Do not execute models or power,Exact origins and approved design unresolved,Before replication outcome construction
