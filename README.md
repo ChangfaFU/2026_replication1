@@ -28,3 +28,23 @@ Only four reporting files are retained in `results/`:
 - `models2018.png`: the paper's two model structures compared across waves.
 
 Supporting per-wave CSVs, the country-reference CSV and duplicate diagnostic figures were removed on 27 October 2026. Working tables now stay in memory. Routine runs do not recreate removed outputs. `--power-only` and `--compare-waves` use the retained comparison table; `--figures-only` refreshes the two figures without fitting models. Raw input files are unchanged.
+## Independent power script (5 November 2026)
+
+`code/power_analysis.R` derives the eligible N from `HBSC2018OAed1.1.csv` and prints only the compact power table. Preprocessing is silent; it fits no models and writes no files. Input sources, preprocessing choices, tier targets and the provisional independent-observation assumptions remain in code comments and the assessment.
+
+```powershell
+& 'C:/Program Files/R/R-4.6.0/bin/Rscript.exe' code/power_analysis.R
+```
+
+An optional CSV path may be supplied. Paths are resolved from script/source location and project ancestors, using replication.R's approach without sourcing its analysis code. The cached WHO reference must accompany the participant CSV; specific errors identify missing inputs. The legacy --benchmark flag is still accepted, but is no longer needed to print the requested benchmark table.
+
+In RStudio:
+
+```r
+source("code/power_analysis.R")
+power_results <- run_hbsc_power()
+```
+
+For preprocessing details only, call `prep <- preprocess_hbsc2018()` and inspect `prep$sample_flow`. The supplied release yields N=13,884 and k=9; no hard-coded sample N is passed to the report calculation. Raw records/reference records/known migrants/standard-available migrants are 244,097 / 181,999 / 32,654 / 21,808. Optional return_data=TRUE exposes constructed variables in memory only.
+
+The reporting wrapper explicitly uses original df=8,124-9-1=8,114 to reproduce the requested preliminary benchmark. That is an independent-observation assumption, not a multilevel df established by the dataset. The lower-level calculate_hbsc_power() still requires original_df explicitly. Published beta/CI inputs come from Table 4; alpha, effect fractions and targets come from the power guidance. These estimates remain provisional, not multilevel-adjusted or formal tier eligibility. COS focal-effect confirmation and study-lead method approval remain outstanding. This one-table default supersedes the earlier sample-flow-only/opt-in instructions.

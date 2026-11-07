@@ -262,3 +262,33 @@ Scope is restricted to the paper's two model structures and reporting tables. Ad
 
 [Download the comparison table](comparison2014_2018.csv). This table is generated from existing model/descriptive outputs and transcribed published benchmarks; no models were rerun.
 
+
+## Standalone power-code audit — 5 November 2026
+
+The standalone noncentral-F calculation matches the installed pwr package; the independent noncentral-t check agrees within 1e-6. Published beta/CI inputs match Table 4, and tier fractions are applied to partial r before conversion to f2, as the power PDF specifies. The replication predictor override has been corrected: original_k=9 is now separate from replication k, so changing the replication model does not change the original partial-r estimate. Default numerical results are unchanged.
+
+This verifies numerical implementation, not design validity. The CI-derived SE is approximate; original denominator df is assumed rather than recovered from the multilevel model. The contextual effects are shared within countries/country-sex units, so individual N alone is insufficient to establish cross-classified model power. COS focal-effect confirmation and study-lead method approval remain necessary. No raw-data analyses or models were rerun in this audit.
+
+## Input provenance and reproducible HBSC2018 preprocessing — 5 November 2026
+
+The independent power script now has a separate preprocessing section and derives the sample size from `HBSC2018OAed1.1.csv`. Providing a dataset eliminates the need to guess observed sample counts or missingness. It does not establish undocumented author choices or turn an independent-person power formula into a multilevel method.
+
+| Input | Value / implementation | Source and status |
+|---|---|---|
+| Imported 2018 records | 244,097 | Counted from the provided CSV; not power N |
+| Valid FAI reference records | 181,999 | Derived from age, sex, perceived status and WHO-reference anthropometry, before immigrant restriction |
+| Known migration background | 32,654 | Derived from respondent/parent ISO codes; unknowns are not treated as native |
+| Migrant records with both country-sex standards | 21,808 | Derived using the wave-specific reference population |
+| Complete analysis sample | 13,884 | Derived after valid FAI, origin/receiving standards and all model covariates |
+| Receiving / origin groups | 32 / 43 | Counted within the derived analysis sample |
+| Model 1 predictor count k | 9 | Paper Section 2.3 specifies the terms; counted/checked in the full-rank fixed-effect design matrix |
+| Original study N | 8,124 | Published paper Section 2.1/Table 4, not the 2018 dataset |
+| Origin beta, 95% CI | .17 [.03, .32] | Published Table 4, Model 1 |
+| Receiving beta, 95% CI | .71 [.54, .89] | Published Table 4, Model 1 |
+| Alpha; tier fractions; targets | .05; .75 / 1.00; .90 / .80 | Supplied Secondary data power.pdf |
+| Original df=8,114 | 8,124-9-1 | Explicit independent-observation assumption; not recovered from data or validated for the original multilevel model |
+| WHO/FAS/centring conventions | LMS with interpolation/tail adjustment; country/age-category/sex midrank FAS quintiles; person-weighted centring | Existing implementation choices. Paper specifies the constructs but does not resolve every convention |
+
+Preprocessing imports semicolon-separated, decimal-comma data, handles a UTF-8 BOM, checks wave/IDs/required fields, preserves NA=Namibia, computes BMI/WHO scores/FAI, applies the paper's migration/origin hierarchy at detailed UK geography, builds reference means before immigrant restriction, constructs six-item FAS quintiles, then uses complete cases and standardises age. It reproduces the existing analysis N without fitting regression models. The source code labels FAS age-category stratification, tie handling, broad-GB rules and at-least-one-native-parent coding as implementation choices rather than dataset-established facts. No new exclusion threshold, sensitivity model or analysis output is introduced.
+
+**No silent power assumptions:** default execution now derives sample flow only. The user must explicitly request `--benchmark` to reproduce the Section 4 independent-observation approximation. The calculation function requires an explicit original_df instead of silently substituting N-k-1. The benchmark flag uses the previous 8,114 assumption and remains provisional; it is not proof that the assumption is justified. A design-appropriate power method and the COS focal effect still require confirmation. These changes supersede the earlier sample-size CLI overrides and no-data-input description of the standalone script.

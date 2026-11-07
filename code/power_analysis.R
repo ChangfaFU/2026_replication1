@@ -1,0 +1,310 @@
+# HBSC2018OAed1.1: preprocessing and preliminary power (5 November 2026).
+# Base R only; no models fitted, packages installed or output files written.
+# Default: derive complete-case N silently and print only the provisional power table.
+# Reported power uses the documented independent-observation benchmark, NOT multilevel power.
+# Run: Rscript code/power_analysis.R [--benchmark] [path/to/HBSC2018OAed1.1.csv]
+# Reference: who2007_bmi_lms.csv in the same directory as the participant CSV.
+
+# 1. INPUT PROVENANCE
+# Published paper Table 4, Model 1: original N=8124; origin beta=.17,
+# CI [.03,.32]; receiving beta=.71, CI [.54,.89]. These are NOT 2018 estimates.
+# Paper Section 2.3: nine fixed slopes, including age x girl, excluding intercept.
+# Secondary data power.pdf: alpha=.05; effect fractions .75/1; targets .90/.80.
+# 2018 codebook and actual CSV: variable names, category codes and ISO fields.
+# Dataset-derived: missingness, eligible N, generation/country coverage.
+# Documented IMPLEMENTATION CHOICES, not facts established by the dataset:
+# WHO monthly LMS interpolation; no extra z exclusion; country/age-CATEGORY/sex
+# midrank FAS quintiles; person-weighted centring; at-least-one-native-parent rule.
+# These reproduce replication.R's current sample, not author-equivalent coding.
+# Effective multilevel df, overlap across waves and power-method approval cannot
+# be recovered from the provided CSV. The report wrapper uses original df=8114
+# as the previously requested provisional benchmark; this is not a data-derived df.
+
+# 2. PREPROCESSING HELPERS (same definitions as the replication script)
+classify_iso_2018 <- function(d, uk = c("detailed", "GB")) {
+    uk <- match.arg(uk)
+    clean <- function(x) {
+        x <- toupper(trimws(x))
+        x[x %in% c("", ".", "XX", "ZZ", "UNKNOWN", "99")] <- NA_character_
+        x[!is.na(x) & !grepl("^[A-Z]{2}(-[A-Z0-9]+)?$", x)] <- NA_character_
+        x[x %in% c("BE-VLG", "BE-WAL")] <- "BE"
+        if (uk == "GB") 
+            x[!is.na(x) & grepl("^GB-", x)] <- "GB"
+        x
+    }
+    receiving <- clean(d$region)
+    own <- clean(d$countryborn)
+    mother <- clean(d$countrybornmo)
+    father <- clean(d$countrybornfa)
+    compare <- function(birth) {
+        same <- birth == receiving
+        if (uk == "detailed") {
+            ambiguous <- !is.na(birth) & !is.na(receiving) & ((birth == "GB" & grepl("^GB-", receiving)) | 
+                (receiving == "GB" & grepl("^GB-", birth)))
+            same[ambiguous] <- NA
+        }
+        same
+    }
+    self_same <- compare(own)
+    mother_same <- compare(mother)
+    father_same <- compare(father)
+    migration <- !self_same | !mother_same | !father_same
+    generation <- ifelse(!is.na(self_same) & !self_same, "1.5", ifelse(!is.na(self_same) & self_same & 
+        (!mother_same | !father_same), "2", NA_character_))
+    origin <- rep(NA_character_, nrow(d))
+    first <- which(generation == "1.5")
+    second <- which(generation == "2")
+    origin[first] <- own[first]
+    maternal_foreign <- !is.na(mother_same) & !mother_same
+    origin[second] <- ifelse(maternal_foreign[second], mother[second], NA_character_)
+    fallback <- second[is.na(mother[second]) | (!is.na(mother_same[second]) & mother_same[second])]
+    origin[fallback] <- ifelse(!is.na(father_same[fallback]) & !father_same[fallback], father[fallback], 
+        NA_character_)
+    if (uk == "detailed") 
+        origin[!is.na(origin) & origin == "GB"] <- NA_character_
+    one_native <- mother_same | father_same
+    data.frame(receiving_iso = receiving, own_iso = own, mother_iso = mother, father_iso = father, migration = migration, 
+        generation = generation, origin_iso = origin, one_native_parent = one_native, origin_in_wave = !is.na(origin) & 
+            origin %in% receiving)
+}
+
+who_bmi_z <- function(bmi, age, sex, reference) {
+    out <- rep(NA_real_, length(bmi))
+    for (s in 1:2) {
+        ref <- reference[reference$sex == s, ]
+        i <- which(sex %in% s & is.finite(bmi) & bmi > 0 & is.finite(age) & age * 12 >= min(ref$month) & 
+            age * 12 <= max(ref$month))
+        if (!length(i)) 
+            next
+        p <- lapply(ref[c("L", "M", "S")], function(v) approx(ref$month, v, age[i] * 12)$y)
+        L <- p$L
+        M <- p$M
+        S <- p$S
+        z <- ((bmi[i]/M)^L - 1)/(L * S)
+        centile <- function(q) M * (1 + L * S * q)^(1/L)
+        lo <- z < -3
+        hi <- z > 3
+        z[lo] <- (-3 + (bmi[i] - centile(-3))/(centile(-2) - centile(-3)))[lo]
+        z[hi] <- (3 + (bmi[i] - centile(3))/(centile(3) - centile(2)))[hi]
+        out[i] <- z
+    }
+    out
+}
+
+
+# Capture source()/RStudio context while this script is loaded, as replication.R does.
+hbsc_script_dir <- local({
+  paths <- unlist(lapply(sys.frames(), function(frame) {
+    if (exists("ofile", envir = frame, inherits = FALSE))
+      get("ofile", envir = frame, inherits = FALSE) else NULL
+  }), use.names = FALSE)
+  paths <- c(paths, sub("^--file=", "", grep("^--file=", commandArgs(FALSE), value = TRUE)))
+  if (requireNamespace("rstudioapi", quietly = TRUE) && rstudioapi::isAvailable())
+    paths <- c(paths, tryCatch(rstudioapi::getSourceEditorContext()$path,
+                              error = function(e) character()))
+  paths <- paths[!is.na(paths) & nzchar(paths)]
+  paths <- paths[file.exists(paths) & !dir.exists(paths)]
+  if (length(paths)) dirname(normalizePath(paths[1], winslash = "/")) else character()
+})
+
+resolve_hbsc2018_paths <- function(data_path = NULL, reference_path = NULL) {
+  roots <- character()
+  for (start in c(hbsc_script_dir, getwd())) {
+    path <- normalizePath(start, winslash = "/", mustWork = FALSE)
+    repeat {
+      roots <- c(roots, path)
+      parent <- dirname(path)
+      if (identical(parent, path)) break
+      path <- parent
+    }
+  }
+  roots <- unique(roots)
+  if (is.null(data_path)) {
+    candidates <- file.path(roots, "data", "HBSC2018OAed1.1.csv")
+  } else {
+    if (!is.character(data_path) || length(data_path) != 1L || is.na(data_path) || !nzchar(data_path))
+      stop("data_path must be a single nonempty path.", call. = FALSE)
+    absolute <- grepl("^[A-Za-z]:", data_path) || startsWith(data_path, "/") || startsWith(data_path, "\\")
+    candidates <- if (absolute) data_path else
+      unique(c(data_path, file.path(roots, data_path), file.path(roots, "data", data_path)))
+  }
+  found <- candidates[file.exists(candidates) & !dir.exists(candidates)]
+  if (!length(found)) stop("HBSC2018 CSV not found. Paths checked:\n",
+    paste(unique(candidates), collapse = "\n"),
+    "\nPass an absolute path to HBSC2018OAed1.1.csv.", call. = FALSE)
+  data_path <- normalizePath(found[1], winslash = "/", mustWork = TRUE)
+  if (is.null(reference_path)) reference_path <- file.path(dirname(data_path), "who2007_bmi_lms.csv")
+  if (!is.character(reference_path) || length(reference_path) != 1L || is.na(reference_path) ||
+      !file.exists(reference_path) || dir.exists(reference_path))
+    stop("WHO BMI reference not found: ", paste(reference_path, collapse = ", "),
+      "\nPlace who2007_bmi_lms.csv alongside the participant CSV, or supply reference_path explicitly.",
+      call. = FALSE)
+  list(data = data_path, reference = normalizePath(reference_path, winslash = "/", mustWork = TRUE))
+}
+# 3. PREPROCESS HBSC2018OAed1.1 AND DERIVE N
+preprocess_hbsc2018 <- function(data_path = NULL, reference_path = NULL,
+                              return_data = FALSE) {
+  paths <- resolve_hbsc2018_paths(data_path, reference_path)
+  data_path <- paths$data
+  reference_path <- paths$reference
+  number <- function(x) suppressWarnings(as.numeric(gsub(",", ".", x, fixed = TRUE)))
+  required <- c("HBSC", "seqno_int", "region", "age", "agecat", "sex", "thinkbody",
+    "bodyweight", "bodyheight", "countryborn", "countrybornmo", "countrybornfa",
+    "fasfamcar", "fasbedroom", "fascomputers", "fasbathroom", "fasdishwash", "fasholidays")
+  header <- names(read.table(data_path, header = TRUE, sep = ";", nrows = 0, check.names = FALSE, fileEncoding = "UTF-8-BOM"))
+  missing <- setdiff(required, header)
+  if (length(missing)) stop("Required columns missing: ", paste(missing, collapse = ", "))
+  # Semicolon-separated file with decimal commas; preserve string NA = Namibia.
+  d <- read.table(data_path, header = TRUE, sep = ";", quote = "\"", comment.char = "",
+    colClasses = ifelse(header %in% required, "character", "NULL"),
+    na.strings = c("", " ", "."), strip.white = TRUE, check.names = FALSE, fileEncoding = "UTF-8-BOM")
+  if (any(number(d$HBSC) != 2018, na.rm = TRUE)) stop("The CSV contains another survey wave.")
+  if (anyNA(d$seqno_int) || anyDuplicated(d$seqno_int)) stop("Missing or duplicate respondent IDs.")
+  ref <- read.csv(reference_path)
+  stopifnot(all(c("sex", "month", "L", "M", "S") %in% names(ref)),
+    !anyDuplicated(ref[c("sex", "month")]), all(is.finite(as.matrix(ref))),
+    all(ref$M > 0), all(ref$S > 0))
+  stopifnot(max(abs(who_bmi_z(c(30,14,19), c(11,16,9), c(1,1,1), ref) - c(3.35,-3.80,1.47))) < .025)
+
+  # Paper Sections 2.2.1 and 2.2.5: BMI/FAI; WHO implementation is documented above.
+  age <- number(d$age); sex <- number(d$sex); agecat <- number(d$agecat)
+  mass <- number(d$bodyweight); height <- number(d$bodyheight)
+  bmi <- mass / (height/100)^2
+  bmi[!is.finite(bmi) | mass <= 0 | height <= 0] <- NA_real_
+  z <- who_bmi_z(bmi, age, sex, ref)
+  perceived <- number(d$thinkbody); perceived[!perceived %in% 1:5] <- NA_real_
+  actual <- as.integer(cut(z, c(-Inf,-2,-1,1,2,Inf), right = FALSE))
+  fai <- perceived - actual
+  valid_fai <- is.finite(fai)
+
+  # Sections 2.2.2-2.2.3: migration and own/maternal/paternal origin hierarchy.
+  # Detailed UK geography; unresolved broad GB is not invented or treated as native.
+  iso <- classify_iso_2018(d, uk = "detailed")
+  country <- iso$receiving_iso
+
+  # Section 2.2.6: reference means BEFORE immigrant/complete-case restrictions.
+  key <- paste(country, sex)
+  groups <- split(which(valid_fai), key[valid_fai])
+  means <- vapply(groups, function(i) mean(fai[i]), numeric(1))
+  centre <- vapply(1:2, function(s) mean(fai[valid_fai & sex %in% s]), numeric(1))
+  receiving_standard <- unname(means[key]) - centre[sex]
+  origin_standard <- unname(means[paste(iso$origin_iso, sex)]) - centre[sex]
+
+  # Section 2.2.4: six FAS items, range-checked using the supplied codebook.
+  # Age CATEGORY and midrank tie handling are current choices, NOT specified exactly in the paper.
+  fas_names <- c("fasfamcar", "fasbedroom", "fascomputers", "fasbathroom", "fasdishwash", "fasholidays")
+  items <- Map(function(x, maxv) {
+    x <- number(x); x[!x %in% seq_len(maxv)] <- NA_real_; x - 1
+  }, d[fas_names], c(3,2,4,4,2,4))
+  total <- Reduce(`+`, items)
+  quintile <- rep(NA_real_, nrow(d))
+  valid_fas <- is.finite(total) & agecat %in% 1:3 & sex %in% 1:2
+  groups <- split(which(valid_fas), paste(country[valid_fas], agecat[valid_fas], sex[valid_fas]))
+  for (i in groups) quintile[i] <- pmin(5, pmax(1,
+    ceiling(5 * (rank(total[i], ties.method = "average") - .5) / length(i))))
+
+  sample <- data.frame(fai = fai, receiving_standard = receiving_standard,
+    origin_standard = origin_standard, age = age, girl = as.integer(sex == 2),
+    fas_quintile = quintile, bmi_z = z, generation15 = as.integer(iso$generation == "1.5"),
+    one_native_parent = as.integer(iso$one_native_parent), receiving = country, origin = iso$origin_iso)
+  immigrant <- iso$migration %in% TRUE
+  standards <- is.finite(receiving_standard) & is.finite(origin_standard)
+  complete <- immigrant & valid_fai & standards & complete.cases(sample)
+  sample <- sample[complete, ]
+  if (nrow(sample) < 2 || !is.finite(sd(sample$age)) || sd(sample$age) == 0)
+    stop("Insufficient complete-case sample or no age variation.")
+  sample$age_z <- as.numeric(scale(sample$age))
+  flow <- data.frame(stage = c("Imported records", "Valid reference FAI (separate reference population)",
+    "Known migration background", "Migration background plus origin/receiving standards",
+    "Complete model sample"),
+    N = c(nrow(d), sum(valid_fai), sum(immigrant), sum(immigrant & standards), nrow(sample)))
+  # k is counted from the specified fixed-effect design, not the CSV's column count.
+  design <- model.matrix(~ receiving_standard + origin_standard + age_z * girl +
+    fas_quintile + bmi_z + generation15 + one_native_parent, data = sample)
+  if (qr(design)$rank != ncol(design)) stop("Fixed-effect design is rank-deficient.")
+  result <- list(N = nrow(sample), k = ncol(design) - 1L, sample_flow = flow,
+    receiving_countries = length(unique(sample$receiving)),
+    origin_countries = length(unique(sample$origin)),
+    generations = table(sample$generation15), source = normalizePath(data_path))
+  if (return_data) result$data <- sample
+  result
+}
+
+# 4. POWER: CONDITIONAL STANDARD-REGRESSION
+calculate_hbsc_power <- function(N, k = 9, original_df, alpha = 0.05) {
+  integer_scalar <- function(x) is.numeric(x) && length(x) == 1L &&
+    is.finite(x) && x == floor(x)
+  if (!integer_scalar(N) || !integer_scalar(k) || k < 1 || N <= k + 1)
+    stop("N and k must be integers, k >= 1, and N > k + 1.")
+  if (missing(original_df) || !integer_scalar(original_df) || original_df <= 0)
+    stop("Supply a justified original_df explicitly; effective multilevel df are not in the CSV.")
+  if (!is.numeric(alpha) || length(alpha) != 1L || !is.finite(alpha) ||
+      alpha <= 0 || alpha >= 1) stop("alpha must lie strictly between 0 and 1.")
+
+  effects <- data.frame(effect = c("Origin-country standard", "Receiving-country standard"),
+                        beta = c(0.17, 0.71), lower_95 = c(0.03, 0.54),
+                        upper_95 = c(0.32, 0.89))
+  # Published CIs are 95%, independently of the requested testing alpha.
+  effects$SE_approx <- (effects$upper_95 - effects$lower_95) / (2 * qnorm(0.975))
+  effects$absolute_ratio <- abs(effects$beta / effects$SE_approx)
+  # original_df is explicit; it is never inferred from the 2018 participant count.
+  v <- N - k - 1
+  # Algebraic equivalent of effectsize::t_to_r(t, df_error).
+  # This df is an independent-observation assumption, not multilevel effective df.
+  effects$partial_r_approx <- effects$absolute_ratio /
+    sqrt(effects$absolute_ratio^2 + original_df)
+
+  critical_F <- qf(1 - alpha, df1 = 1, df2 = v)
+  power_at_r <- function(r) {
+    f2 <- r^2 / (1 - r^2)
+    # Equivalent to pwr::pwr.f2.test(u=1, v=v, f2=f2, sig.level=alpha).
+    # The package uses noncentrality f2 * (u + v + 1).
+    pf(critical_F, df1 = 1, df2 = v,
+       ncp = f2 * (v + 2), lower.tail = FALSE)
+  }
+  effects$tier1_r <- 0.75 * effects$partial_r_approx
+  effects$tier2_r <- effects$partial_r_approx
+  effects$tier1_power <- power_at_r(effects$tier1_r)
+  effects$tier2_power <- power_at_r(effects$tier2_r)
+  effects$replication_N <- N
+  effects$predictors_k <- k
+  effects$original_df_assumed <- original_df
+  effects$replication_df_assumed <- v
+  effects$alpha <- alpha
+  effects
+}
+
+# Tier 1: 75% of original partial r, target 90%; Tier 2: full r, target 80%.
+# Percentages are rounded. Results are provisional and not multilevel-adjusted;
+# confirm the COS focal effect and obtain study-lead method approval.
+print_hbsc_power <- function(results) {
+  display <- data.frame(
+    effect = sub("-country standard", "", results$effect, fixed = TRUE),
+    N = results$replication_N,
+    partial_r_approx = round(results$partial_r_approx, 5),
+    tier1_75pct = sprintf("%.2f%%", 100 * results$tier1_power),
+    tier2_100pct = sprintf("%.2f%%", 100 * results$tier2_power)
+  )
+  print(display, row.names = FALSE)
+  invisible(results)
+}
+
+# 5. Print the power table. --benchmark is retained for compatibility.
+run_hbsc_power <- function(data_path = NULL, original_df = 8124 - 9 - 1,
+                           alpha = 0.05) {
+  prep <- preprocess_hbsc2018(data_path)
+  results <- calculate_hbsc_power(N = prep$N, k = prep$k,
+                                  original_df = original_df, alpha = alpha)
+  print_hbsc_power(results)
+  invisible(results)
+}
+
+if (sys.nframe() == 0L) {
+  args <- commandArgs(trailingOnly = TRUE)
+  unknown <- args[grepl("^--", args) & args != "--benchmark"]
+  if (length(unknown)) stop("Unknown option: ", paste(unknown, collapse = ", "))
+  paths <- args[!grepl("^--", args)]
+  if (length(paths) > 1L) stop("Usage: Rscript power_analysis.R [CSV path]")
+  power_results <- run_hbsc_power(if (length(paths)) paths[1] else NULL)
+}
+
